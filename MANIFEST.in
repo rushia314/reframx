@@ -1,0 +1,16 @@
+include LICENSE
+include README.md
+include src/reframx/py.typed
+
+# Exclude unimplemented local placeholder directories/files from sdist
+prune src/reframx/analysis
+prune src/reframx/cli
+prune src/reframx/configuration
+prune src/reframx/core/events
+prune src/reframx/development
+prune src/reframx/integrations/transformers
+prune src/reframx/logging
+prune src/reframx/persistence
+prune src/reframx/utils
+exclude src/reframx/experiments/builder.py
+exclude src/reframx/experiments/manager.py

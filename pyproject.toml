@@ -1,0 +1,104 @@
+[build-system]
+requires = [
+    "setuptools>=68",
+    "wheel",
+]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "reframx"
+version = "0.1.1"
+description = "A modular, code-first framework for neural network research."
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.10"
+authors = [
+    { name = "Research Framework Contributors" },
+]
+keywords = [
+    "deep-learning",
+    "neural-networks",
+    "research",
+    "pytorch",
+    "mmengine",
+    "machine-learning",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Typing :: Typed",
+]
+dependencies = []
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "mypy>=1.8",
+    "ruff>=0.9",
+]
+
+[project.urls]
+Homepage = "https://github.com/your-org/reframx"
+Repository = "https://github.com/your-org/reframx"
+Documentation = "https://github.com/your-org/reframx/tree/main/docs"
+Issues = "https://github.com/your-org/reframx/issues"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+exclude = [
+    "reframx.analysis*",
+    "reframx.cli*",
+    "reframx.configuration*",
+    "reframx.core.events*",
+    "reframx.datasets.builtin*",
+    "reframx.datasets.pipelines*",
+    "reframx.development*",
+    "reframx.evaluators.builtin*",
+    "reframx.execution.loops*",
+    "reframx.execution.optimizers*",
+    "reframx.execution.state*",
+    "reframx.integrations.transformers*",
+    "reframx.logging*",
+    "reframx.methods.builtin*",
+    "reframx.models.adapters*",
+    "reframx.models.builtin*",
+    "reframx.models.loaders*",
+    "reframx.objectives.builtin*",
+    "reframx.persistence*",
+    "reframx.strategies.builtin*",
+    "reframx.utils*",
+]
+
+[tool.setuptools.package-data]
+reframx = ["py.typed"]
+
+[tool.setuptools.exclude-package-data]
+"reframx.experiments" = ["builder.py", "manager.py"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+addopts = "-ra"
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+check_untyped_defs = true
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B"]
