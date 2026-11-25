@@ -1,7 +1,7 @@
 # reframx
 
 [![PyPI version](https://img.shields.io/pypi/v/reframx.svg)](https://pypi.org/project/reframx/)
-[![Python versions](https://img.shields.io/pypi/pyversions/reframx.svg)](https://pypi.org/project/reframx/)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://github.com/rushia314/reframx/blob/main/LICENSE)
 [![Typing: Typed](https://img.shields.io/badge/typing-typed-brightgreen.svg)](https://peps.python.org/pep-0561/)
 
