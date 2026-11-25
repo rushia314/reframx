@@ -1,33 +1,38 @@
-# Research Framework
+# reframx
+
+[![PyPI version](https://img.shields.io/pypi/v/reframx.svg)](https://pypi.org/project/reframx/)
+[![Python versions](https://img.shields.io/pypi/pyversions/reframx.svg)](https://pypi.org/project/reframx/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://github.com/rushia314/reframx/blob/main/LICENSE)
+[![Typing: Typed](https://img.shields.io/badge/typing-typed-brightgreen.svg)](https://peps.python.org/pep-0561/)
 
 A modular, Python-first, code-first framework for neural network research.
 
-**Core philosophy:** Researchers own their architectures, losses, data pipelines, and training algorithms. The framework provides contract-driven composition, validation, pluggable execution backends (lightweight native & MMEngine), model instrumentation, plugins, and portable `.rfx` experiment snapshots — without forcing a fixed model hierarchy or a single `forward -> loss -> backward -> step` loop.
+> **Core philosophy:** Researchers own their architectures, losses, data pipelines, and training algorithms. `reframx` provides contract-driven composition, validation, pluggable execution backends, model instrumentation, plugins, and portable `.rfx` experiment snapshots — without forcing a fixed model hierarchy or a single `forward -> loss -> backward -> step` loop.
 
 ## Key Features
 
-- **Zero-dependency core:** Core contracts, validation, execution engine, instrumentation, plugins, and `.rfx` packaging use only the Python standard library.
-- **Contract-driven composition:** `ComponentSpec`, `Requirement`, `RequirementGroup` (`all_of` / `any_of`), `Capability`, `IOContract`, and `validate_requirements()`.
+- **Zero-dependency core:** Core contracts, validation, execution engine, instrumentation, plugins, and `.rfx` packaging rely only on the Python standard library.
+- **Contract-driven composition:** `ComponentSpec`, `Requirement`, `RequirementGroup` (`all_of` / `any_of`), `Capability`, `IOContract`, and `validate_requirements()` with concise `str`/`dict` shorthand.
 - **Full research freedom + sensible defaults:**
   - `BaseMethod` for arbitrary multi-forward / multi-backward / multi-optimizer algorithms.
-  - `SupervisedMethod` and PyTorch built-ins (`TorchClassificationMethod`, `TorchRegressionMethod`, `CrossEntropyObjective`, `BCEWithLogitsObjective`, `MSEObjective`, `TorchAccuracyEvaluator`, `TorchRegressionEvaluator`) for fast standard training.
-- **Pluggable Execution Backends:**
-  - `NativeBackend` (default, 0 dependencies, easy debugging).
-  - `MMEngineBackend` (optional, lazy-imported: GPU/DDP, `OptimWrapper`, `ParamScheduler`, `CheckpointHook` with `save_best`/`save_last`, `Visualizer`).
-- **PyTorch GPU integration (non-invasive):** `TorchModelAdapter`, `TorchDatasetAdapter`, `TorchStrategy` (auto device, AMP `fp16`/`bf16`, `GradScaler`, `max_grad_norm`, gradient accumulation) — never overwrites your existing PyTorch/CUDA build.
-- **Model Instrumentation:** `rf.probe()` / `rf.Probe` (zero-overhead pass-through via `contextvars`), `watch_module` / `watch_modules`, auto-detach, `tensor_stats`, and `check_nan_inf`.
-- **Plugin System:** `ComponentRegistry` and `PluginManager` supporting `load_plugin`, `load_file`, `load_path` (multi-file packages), `load_directory`, `discover_entry_points` / `load_entry_points`, and clean `unload_plugin`.
-- **Portable `.rfx` Archives:** Atomic ZIP-based experiment snapshots (`minimal`, `standard`, `portable`, `full` profiles) with SHA-256 verification and safe state restoration.
+  - `SupervisedMethod` and PyTorch built-ins (`TorchClassificationMethod`, `TorchRegressionMethod`, `CrossEntropyObjective`, `BCEWithLogitsObjective`, `MSEObjective`, `TorchAccuracyEvaluator`, `TorchRegressionEvaluator`) for rapid standard workflows.
+- **Pluggable execution backends:**
+  - `NativeBackend` (default, zero dependencies, easy debugging, `experiment.stop()`).
+  - `MMEngineBackend` (optional, lazy-imported: GPU/DDP/FSDP, `OptimWrapper`, `ParamScheduler`, `CheckpointHook` with `save_best`/`save_last`, `Visualizer`).
+- **Non-invasive PyTorch GPU integration:** `TorchModelAdapter`, `TorchDatasetAdapter`, and `TorchStrategy` (auto device placement, AMP `fp16`/`bf16`, `GradScaler`, `max_grad_norm`, gradient accumulation) — never overwrites your existing PyTorch/CUDA installation.
+- **Model instrumentation:** `rf.probe()` / `rf.Probe` (zero-overhead pass-through via `contextvars`), `watch_module` / `watch_modules`, automatic tensor detach, `tensor_stats`, and `check_nan_inf`.
+- **Plugin system:** `ComponentRegistry` and `PluginManager` supporting `load_plugin`, `load_file`, `load_path` (multi-file packages), `load_directory`, safe `discover_entry_points` / `load_entry_points`, and clean `unload_plugin`.
+- **Portable `.rfx` archives:** Atomic, unencrypted ZIP experiment snapshots (`minimal`, `standard`, `portable`, `full` profiles) with SHA-256 verification and safe state restoration.
 
 ## Installation
 
 ```bash
-pip install -e ".[dev]"
+pip install reframx
 ```
 
-> **Note:** `torch` and `mmengine` are intentionally **not** declared as mandatory dependencies so installing `reframx` never overwrites your platform-specific CUDA/PyTorch build. Install them separately as needed for your hardware.
+> **Optional integrations:** `torch` and `mmengine` are intentionally **not** installed automatically so `pip install reframx` never overwrites your platform-specific CUDA/PyTorch build. Install PyTorch for your hardware from [pytorch.org](https://pytorch.org/get-started/locally/), and optionally `pip install mmengine` for `MMEngineBackend`.
 
-## Quick Example (PyTorch GPU + MMEngine)
+## Quick Start
 
 ```python
 import torch
@@ -92,10 +97,6 @@ experiment.export("./work_dirs/quick_demo.rfx", profile="standard")
 - [examples/custom_instrumentation/probes_and_module_watch.py](https://github.com/rushia314/reframx/blob/main/examples/custom_instrumentation/probes_and_module_watch.py) — `rf.probe()` + non-invasive `watch_modules()` (`post_forward` & `backward`) + `check_nan_inf`.
 - [examples/basic/full_experiment.py](https://github.com/rushia314/reframx/blob/main/examples/basic/full_experiment.py) & [examples/basic/real_binary_classification.py](https://github.com/rushia314/reframx/blob/main/examples/basic/real_binary_classification.py) — Zero-dependency pure-Python examples.
 
-## Running Tests
+## License
 
-```bash
-python -m pytest
-python -m ruff check src tests examples
-python -m mypy src
-```
+Released under the [MIT License](https://github.com/rushia314/reframx/blob/main/LICENSE).
