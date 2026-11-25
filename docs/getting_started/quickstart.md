@@ -4,7 +4,7 @@
 
 ### Development Environment (Zero-dependency Core)
 ```bash
-python -m pip install -e ".[dev]"
+pip install reframx
 ```
 
 ### Optional Integrations (PyTorch GPU & MMEngine)
