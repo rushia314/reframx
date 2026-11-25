@@ -78,25 +78,25 @@ experiment.export("./work_dirs/quick_demo.rfx", profile="standard")
 
 ## Documentation
 
-- [Getting Started & Quickstart](https://github.com/rushia314/reframx/blob/main/docs/getting_started/quickstart.md)
-- [User Guide](https://github.com/rushia314/reframx/blob/main/docs/user_guide/usage_guide.md)
-- [Developer Guide: Writing Custom Components](https://github.com/rushia314/reframx/blob/main/docs/developer_guide/writing_custom_components.md)
-- [Developer Guide: Writing Plugins](https://github.com/rushia314/reframx/blob/main/docs/developer_guide/writing_plugins.md)
-- [Architecture & Class/Module Diagrams](https://github.com/rushia314/reframx/blob/main/docs/developer_guide/architecture_diagrams.md)
-- [API Reference](https://github.com/rushia314/reframx/blob/main/docs/api_reference/index.md)
+- [Getting Started & Quickstart](https://github.com/rushia314/reframx/blob/master/docs/getting_started/quickstart.md)
+- [User Guide](https://github.com/rushia314/reframx/blob/master/docs/user_guide/usage_guide.md)
+- [Developer Guide: Writing Custom Components](https://github.com/rushia314/reframx/blob/master/docs/developer_guide/writing_custom_components.md)
+- [Developer Guide: Writing Plugins](https://github.com/rushia314/reframx/blob/master/docs/developer_guide/writing_plugins.md)
+- [Architecture & Class/Module Diagrams](https://github.com/rushia314/reframx/blob/master/docs/developer_guide/architecture_diagrams.md)
+- [API Reference](https://github.com/rushia314/reframx/blob/master/docs/api_reference/index.md)
 
 ## Examples
 
-- [examples/common_component.py](https://github.com/rushia314/reframx/blob/main/examples/common_component.py) — Contract & compatibility validation.
-- [examples/basic/pytorch_experiment.py](https://github.com/rushia314/reframx/blob/main/examples/basic/pytorch_experiment.py) — Concise PyTorch experiment using built-ins.
-- [examples/basic/text_attention_binary_classification.py](https://github.com/rushia314/reframx/blob/main/examples/basic/text_attention_binary_classification.py) — Multi-Head Attention text classification on GPU with `tiktoken`, HuggingFace `datasets`, and `MMEngineBackend`.
-- [examples/custom_task/multilabel_task.py](https://github.com/rushia314/reframx/blob/main/examples/custom_task/multilabel_task.py) — Custom `BaseTask` with shorthand `RequirementGroup` & `IOContract`.
-- [examples/custom_model/residual_model.py](https://github.com/rushia314/reframx/blob/main/examples/custom_model/residual_model.py) — Plain PyTorch `nn.Module` + `TorchModelAdapter` + custom validator + `.rfx` restore.
-- [examples/custom_method/dual_optimizer_method.py](https://github.com/rushia314/reframx/blob/main/examples/custom_method/dual_optimizer_method.py) — Manual `BaseMethod` with 2 models, 2 losses, and 2 optimizers.
-- [examples/custom_execution/custom_strategy_and_hooks.py](https://github.com/rushia314/reframx/blob/main/examples/custom_execution/custom_strategy_and_hooks.py) — Gradient accumulation, `EarlyStopOnLossHook`, `experiment.stop()`, and `catch_interrupt=True`.
-- [examples/custom_instrumentation/probes_and_module_watch.py](https://github.com/rushia314/reframx/blob/main/examples/custom_instrumentation/probes_and_module_watch.py) — `rf.probe()` + non-invasive `watch_modules()` (`post_forward` & `backward`) + `check_nan_inf`.
-- [examples/basic/full_experiment.py](https://github.com/rushia314/reframx/blob/main/examples/basic/full_experiment.py) & [examples/basic/real_binary_classification.py](https://github.com/rushia314/reframx/blob/main/examples/basic/real_binary_classification.py) — Zero-dependency pure-Python examples.
+- [examples/common_component.py](https://github.com/rushia314/reframx/blob/master/examples/common_component.py) — Contract & compatibility validation.
+- [examples/basic/pytorch_experiment.py](https://github.com/rushia314/reframx/blob/master/examples/basic/pytorch_experiment.py) — Concise PyTorch experiment using built-ins.
+- [examples/basic/text_attention_binary_classification.py](https://github.com/rushia314/reframx/blob/master/examples/basic/text_attention_binary_classification.py) — Multi-Head Attention text classification on GPU with `tiktoken`, HuggingFace `datasets`, and `MMEngineBackend`.
+- [examples/custom_task/multilabel_task.py](https://github.com/rushia314/reframx/blob/master/examples/custom_task/multilabel_task.py) — Custom `BaseTask` with shorthand `RequirementGroup` & `IOContract`.
+- [examples/custom_model/residual_model.py](https://github.com/rushia314/reframx/blob/master/examples/custom_model/residual_model.py) — Plain PyTorch `nn.Module` + `TorchModelAdapter` + custom validator + `.rfx` restore.
+- [examples/custom_method/dual_optimizer_method.py](https://github.com/rushia314/reframx/blob/master/examples/custom_method/dual_optimizer_method.py) — Manual `BaseMethod` with 2 models, 2 losses, and 2 optimizers.
+- [examples/custom_execution/custom_strategy_and_hooks.py](https://github.com/rushia314/reframx/blob/master/examples/custom_execution/custom_strategy_and_hooks.py) — Gradient accumulation, `EarlyStopOnLossHook`, `experiment.stop()`, and `catch_interrupt=True`.
+- [examples/custom_instrumentation/probes_and_module_watch.py](https://github.com/rushia314/reframx/blob/master/examples/custom_instrumentation/probes_and_module_watch.py) — `rf.probe()` + non-invasive `watch_modules()` (`post_forward` & `backward`) + `check_nan_inf`.
+- [examples/basic/full_experiment.py](https://github.com/rushia314/reframx/blob/master/examples/basic/full_experiment.py) & [examples/basic/real_binary_classification.py](https://github.com/rushia314/reframx/blob/master/examples/basic/real_binary_classification.py) — Zero-dependency pure-Python examples.
 
 ## License
 
-Released under the [MIT License](https://github.com/rushia314/reframx/blob/main/LICENSE).
+Released under the [MIT License](https://github.com/rushia314/reframx/blob/master/LICENSE).
