@@ -48,10 +48,10 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/your-org/reframx"
-Repository = "https://github.com/your-org/reframx"
-Documentation = "https://github.com/your-org/reframx/tree/main/docs"
-Issues = "https://github.com/your-org/reframx/issues"
+Homepage = "https://github.com/rushia314/reframx"
+Repository = "https://github.com/rushia314/reframx"
+Documentation = "https://github.com/rushia314/reframx/tree/main/docs"
+Issues = "https://github.com/rushia314/reframx/issues"
 
 [tool.setuptools.packages.find]
 where = ["src"]
