@@ -37,9 +37,14 @@ class CudaMemoryHook(BaseHook):
         if step % self.log_every_steps == 0:
             peak_gib = self._torch.cuda.max_memory_allocated() / _BYTES_PER_GIB
             alloc_gib = self._torch.cuda.memory_allocated() / _BYTES_PER_GIB
+            vram_metrics = {
+                "peak_vram_gib": peak_gib,
+                "allocated_vram_gib": alloc_gib,
+            }
+            if hasattr(ctx, "step_metrics") and isinstance(ctx.step_metrics, dict):
+                ctx.step_metrics.update(vram_metrics)
             if ctx.run is not None and ctx.run.train_history:
-                ctx.run.train_history[-1]["peak_vram_gib"] = peak_gib
-                ctx.run.train_history[-1]["allocated_vram_gib"] = alloc_gib
+                ctx.run.train_history[-1].update(vram_metrics)
             ctx.state.extra["peak_vram_gib"] = peak_gib
             if self.reset_peak_each_log:
                 self._torch.cuda.reset_peak_memory_stats()

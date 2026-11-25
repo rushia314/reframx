@@ -397,8 +397,11 @@ class InstrumentationHook(BaseHook):
 
     def on_step_end(self, ctx: Any, batch: Any, result: Any) -> None:
         step_metrics = self.manager.pop_step_metrics()
-        if self.log_to_run and step_metrics and ctx.run is not None and ctx.run.train_history:
-            ctx.run.train_history[-1].update(step_metrics)
+        if self.log_to_run and step_metrics:
+            if hasattr(ctx, "step_metrics") and isinstance(ctx.step_metrics, dict):
+                ctx.step_metrics.update(step_metrics)
+            if ctx.run is not None and ctx.run.train_history:
+                ctx.run.train_history[-1].update(step_metrics)
 
     def on_eval_start(self, ctx: Any) -> None:
         self.manager.set_step_context(

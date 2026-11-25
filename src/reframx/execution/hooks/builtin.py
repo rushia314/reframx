@@ -13,6 +13,28 @@ from typing import Any, Literal
 from reframx.execution.hooks.base import BaseHook
 
 
+def _collect_step_metrics(ctx: Any, result: Any) -> dict[str, Any]:
+    """Merge step metrics from train_history[-1], result, and ctx.step_metrics."""
+    merged: dict[str, Any] = {}
+    run = getattr(ctx, "run", None)
+    history = getattr(run, "train_history", None)
+    if history:
+        latest = history[-1]
+        if (
+            isinstance(latest, Mapping)
+            and latest.get("step") == ctx.state.global_step
+        ):
+            for k, v in latest.items():
+                if k not in ("epoch", "step"):
+                    merged[k] = v
+    if hasattr(result, "resolved_metrics"):
+        merged.update(result.resolved_metrics())
+    step_metrics = getattr(ctx, "step_metrics", None)
+    if isinstance(step_metrics, Mapping):
+        merged.update(step_metrics)
+    return merged
+
+
 def _extract_state(obj: Any) -> Any | None:
     if obj is None:
         return None
@@ -184,7 +206,7 @@ class CheckpointHook(BaseHook):
             and ctx.state.global_step > 0
             and ctx.state.global_step % self.save_every_steps == 0
         ):
-            metrics = result.resolved_metrics() if hasattr(result, "resolved_metrics") else {}
+            metrics = _collect_step_metrics(ctx, result)
             target = self.save_dir / f"step_{ctx.state.global_step}{self.filename_ext}"
             _atomic_save_state(self._build_payload(ctx, metrics), target)
             self._save_last(ctx, metrics)
@@ -237,14 +259,12 @@ class JSONLLoggerHook(BaseHook):
         self._fp = self.log_path.open("a", encoding="utf-8")
 
     def on_step_end(self, ctx: Any, batch: Any, result: Any) -> None:
-        metrics = result.resolved_metrics() if hasattr(result, "resolved_metrics") else {}
         self._write_line(
             {
                 "event": "train",
                 "epoch": ctx.state.epoch,
                 "step": ctx.state.global_step,
-                **metrics,
-                **ctx.step_metrics,
+                **_collect_step_metrics(ctx, result),
             }
         )
 
@@ -299,8 +319,7 @@ class ConsoleLoggerHook(BaseHook):
             self.log_every_steps is not None
             and ctx.state.global_step % self.log_every_steps == 0
         ):
-            metrics = result.resolved_metrics() if hasattr(result, "resolved_metrics") else {}
-            merged = {**metrics, **ctx.step_metrics}
+            merged = _collect_step_metrics(ctx, result)
             self.printer(
                 f"[Step {ctx.state.global_step}] {self._fmt(merged)}"
             )

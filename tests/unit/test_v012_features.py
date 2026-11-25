@@ -317,3 +317,56 @@ def test_torch_strategy_auto_move_model_grad_norm_skip_nan_and_scheduler():
     assert strategy.optimizer_step(opt, ctx) is False
     assert ctx.step_metrics.get("skipped_nonfinite_step") == 1
     assert torch.equal(raw.weight.detach(), before_w)
+
+
+def test_step_metrics_sync_between_instrumentation_and_logger_hooks(tmp_path: Path):
+    model = StatefulModel()
+    dataset = rf.BaseDataset(splits_data={"train": [{"x": 2.0}, {"x": 4.0}]})
+
+    class _ProbedMethod(rf.BaseMethod):
+        def __init__(self) -> None:
+            super().__init__(capabilities=(rf.Capability("prediction"),))
+
+        def train_step(self, batch, ctx):
+            val = rf.probe("block/act", batch["x"])
+            return rf.MethodResult(task_outputs={"prediction": val}, loss=val)
+
+    inst = rf.InstrumentationManager()
+    inst.watch_probe("block/act", lambda ev: {"val": float(ev.value)})
+
+    log_path = tmp_path / "metrics.jsonl"
+    console_lines: list[str] = []
+    seen_ctx_step_metrics: list[dict[str, float]] = []
+
+    class _InspectorHook(rf.BaseHook):
+        def on_step_end(self, ctx, batch, result):
+            seen_ctx_step_metrics.append(dict(ctx.step_metrics))
+
+    exp = rf.Experiment(
+        task=rf.BaseTask(requirements="prediction"),
+        method=_ProbedMethod(),
+        model=model,
+        dataset=dataset,
+        hooks=[
+            rf.InstrumentationHook(inst),
+            _InspectorHook(),
+            JSONLLoggerHook(log_path),
+            ConsoleLoggerHook(
+                log_every_steps=1,
+                log_every_epochs=None,
+                printer=console_lines.append,
+            ),
+        ],
+    )
+    run = exp.run(max_epochs=1, eval_split=None)
+
+    assert len(run.train_history) == 2
+    assert run.train_history[0]["block/act/val"] == pytest.approx(2.0)
+    assert seen_ctx_step_metrics[0]["block/act/val"] == pytest.approx(2.0)
+
+    jsonl_rows = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()]
+    train_rows = [r for r in jsonl_rows if r.get("event") == "train"]
+    assert len(train_rows) == 2
+    assert train_rows[0]["block/act/val"] == pytest.approx(2.0)
+    assert train_rows[1]["block/act/val"] == pytest.approx(4.0)
+    assert any("block/act/val=2.0000" in line for line in console_lines)
