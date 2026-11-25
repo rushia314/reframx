@@ -60,13 +60,17 @@ def build_mm_model(ctx: ExecutionContext, mm_strategy: MMEngineStrategy) -> Any:
                 **self._rf_ctx.step_metrics,
             }
             if self._rf_ctx.run is not None:
-                self._rf_ctx.run.train_history.append(
-                    {
-                        "epoch": self._rf_ctx.state.epoch,
-                        "step": self._rf_ctx.state.global_step,
-                        **metrics,
-                    }
-                )
+                max_hist = self._rf_ctx.state.extra.get("_max_train_history")
+                if max_hist is None or max_hist > 0:
+                    self._rf_ctx.run.train_history.append(
+                        {
+                            "epoch": self._rf_ctx.state.epoch,
+                            "step": self._rf_ctx.state.global_step,
+                            **metrics,
+                        }
+                    )
+                    if isinstance(max_hist, int) and len(self._rf_ctx.run.train_history) > max_hist:
+                        del self._rf_ctx.run.train_history[:-max_hist]
             self._rf_ctx.state.extra["_last_result"] = result
             if self._rf_ctx.state.should_stop:
                 raise _GracefulStopError()

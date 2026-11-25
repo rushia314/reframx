@@ -5,6 +5,7 @@ from reframx.integrations.pytorch.evaluators import (
     TorchAccuracyEvaluator,
     TorchRegressionEvaluator,
 )
+from reframx.integrations.pytorch.hooks import CudaMemoryHook
 from reframx.integrations.pytorch.methods import (
     TorchClassificationMethod,
     TorchRegressionMethod,
@@ -28,6 +29,7 @@ from reframx.integrations.pytorch.utils import (
 __all__ = [
     "BCEWithLogitsObjective",
     "CrossEntropyObjective",
+    "CudaMemoryHook",
     "MSEObjective",
     "TorchAccuracyEvaluator",
     "TorchClassificationMethod",

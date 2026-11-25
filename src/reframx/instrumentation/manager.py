@@ -7,7 +7,7 @@ import contextvars
 import fnmatch
 from collections.abc import Callable, Generator, Iterable, Mapping
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 from reframx.execution.hooks.base import BaseHook
 from reframx.instrumentation.events import (
@@ -22,6 +22,8 @@ from reframx.instrumentation.module_hooks import (
 )
 
 EventCallback = Callable[[InstrumentationEvent], Mapping[str, Any] | None]
+ReduceMode = Literal["last", "mean", "min", "max", "list"]
+VALID_REDUCE_MODES: tuple[ReduceMode, ...] = ("last", "mean", "min", "max", "list")
 
 _ACTIVE_MANAGER: contextvars.ContextVar[InstrumentationManager | None] = (
     contextvars.ContextVar("rf_active_instrumentation_manager", default=None)
@@ -40,7 +42,31 @@ class _ProbeSubscription:
     every_n_steps: int
     phases: frozenset[str] | None
     detach: bool
+    reduce: ReduceMode = "last"
     active: bool = True
+
+
+def _reduce_values(values: list[Any], mode: ReduceMode) -> Any:
+    if not values:
+        return None
+    if mode == "last":
+        return values[-1]
+    if mode == "list":
+        return list(values)
+    nums = [
+        float(v)
+        for v in values
+        if isinstance(v, (int, float)) and not isinstance(v, bool)
+    ]
+    if not nums:
+        return values[-1]
+    if mode == "mean":
+        return sum(nums) / len(nums)
+    if mode == "min":
+        return min(nums)
+    if mode == "max":
+        return max(nums)
+    return values[-1]
 
 
 class InstrumentationManager:
@@ -50,7 +76,7 @@ class InstrumentationManager:
         self._probe_subs: list[_ProbeSubscription] = []
         self._handles: list[WatchHandle] = []
         self._records: list[InstrumentationRecord] = []
-        self._step_metrics_buffer: dict[str, Any] = {}
+        self._step_metrics_buffer: dict[str, tuple[ReduceMode, list[Any]]] = {}
         self._max_records = max_records
 
         self._epoch = 0
@@ -66,10 +92,13 @@ class InstrumentationManager:
         self._records.clear()
 
     def pop_step_metrics(self) -> dict[str, Any]:
-        """Return and clear metrics captured during the current step."""
-        data = dict(self._step_metrics_buffer)
+        """Reduce, return, and clear metrics captured during the current step."""
+        reduced = {
+            metric_key: _reduce_values(values, mode)
+            for metric_key, (mode, values) in self._step_metrics_buffer.items()
+        }
         self._step_metrics_buffer.clear()
-        return data
+        return reduced
 
     def set_step_context(
         self,
@@ -111,6 +140,8 @@ class InstrumentationManager:
         self,
         event: InstrumentationEvent,
         metrics: Mapping[str, Any] | None,
+        *,
+        reduce: ReduceMode = "last",
     ) -> None:
         if not metrics:
             return
@@ -128,7 +159,11 @@ class InstrumentationManager:
         if self._max_records is not None and len(self._records) > self._max_records:
             del self._records[: len(self._records) - self._max_records]
         for key, value in metric_dict.items():
-            self._step_metrics_buffer[f"{event.name}/{key}"] = value
+            full_key = f"{event.name}/{key}"
+            if full_key not in self._step_metrics_buffer:
+                self._step_metrics_buffer[full_key] = (reduce, [value])
+            else:
+                self._step_metrics_buffer[full_key][1].append(value)
 
     def watch_probe(
         self,
@@ -138,16 +173,22 @@ class InstrumentationManager:
         every_n_steps: int = 1,
         phases: Iterable[str] | None = None,
         detach: bool = True,
+        reduce: ReduceMode = "last",
     ) -> WatchHandle:
         """Subscribe ``callback`` to probes matching ``pattern`` (exact or glob)."""
         if every_n_steps < 1:
             raise ValueError("every_n_steps must be >= 1.")
+        if reduce not in VALID_REDUCE_MODES:
+            raise ValueError(
+                f"Unsupported reduce mode {reduce!r}; expected one of {VALID_REDUCE_MODES}."
+            )
         sub = _ProbeSubscription(
             pattern=pattern,
             callback=callback,
             every_n_steps=every_n_steps,
             phases=frozenset(phases) if phases is not None else None,
             detach=detach,
+            reduce=reduce,
         )
         self._probe_subs.append(sub)
 
@@ -207,7 +248,7 @@ class InstrumentationManager:
                 call_index=call_index,
                 metadata=dict(metadata or {}),
             )
-            self._record_result(event, sub.callback(event))
+            self._record_result(event, sub.callback(event), reduce=sub.reduce)
 
         return value
 
@@ -221,10 +262,15 @@ class InstrumentationManager:
         every_n_steps: int = 1,
         phases: Iterable[str] | None = None,
         detach: bool = True,
+        reduce: ReduceMode = "last",
     ) -> WatchHandle:
         """Attach hooks to a single module and return its removable ``WatchHandle``."""
         if every_n_steps < 1:
             raise ValueError("every_n_steps must be >= 1.")
+        if reduce not in VALID_REDUCE_MODES:
+            raise ValueError(
+                f"Unsupported reduce mode {reduce!r}; expected one of {VALID_REDUCE_MODES}."
+            )
         phase_set = frozenset(phases) if phases is not None else None
         target = getattr(module, "module", module)
         resolved_name = name or type(target).__name__
@@ -233,7 +279,9 @@ class InstrumentationManager:
             target,
             name=resolved_name,
             stages=stages,
-            emit_fn=lambda event: self._record_result(event, callback(event)),
+            emit_fn=lambda event: self._record_result(
+                event, callback(event), reduce=reduce
+            ),
             should_sample=lambda: self._should_sample(
                 every_n_steps=every_n_steps,
                 phases=phase_set,
@@ -255,6 +303,7 @@ class InstrumentationManager:
         every_n_steps: int = 1,
         phases: Iterable[str] | None = None,
         detach: bool = True,
+        reduce: ReduceMode = "last",
     ) -> list[WatchHandle]:
         """Attach hooks to every submodule whose name matches glob ``pattern``."""
         target = getattr(root_module, "module", root_module)
@@ -277,6 +326,7 @@ class InstrumentationManager:
                         every_n_steps=every_n_steps,
                         phases=phases,
                         detach=detach,
+                        reduce=reduce,
                     )
                 )
         return handles

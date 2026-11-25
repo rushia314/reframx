@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-import io
 import json
 import pickle
 import sys
+import tempfile
 from collections.abc import Iterable, Mapping
 from dataclasses import asdict, is_dataclass
 from pathlib import Path
@@ -57,25 +57,36 @@ def _extract_component_state(component: Any) -> Any | None:
     return None
 
 
-def _encode_state_payload(state: Any) -> tuple[str, bytes]:
-    """Encode component/optimizer state into ``(format_ext, bytes)``.
+def _stage_state_entry(
+    writer: RFXArchiveWriter,
+    member_prefix: str,
+    state: Any,
+    *,
+    scratch_dir: Path,
+) -> None:
+    """Serialize component/optimizer state without buffering multi-GB weights in RAM.
 
-    Prefers JSON for pure JSON-serializable dicts (safe, human-readable),
-    ``torch.save`` when PyTorch is active in the process, and pickle otherwise.
+    Prefers JSON for small pure-JSON dicts, streams ``torch.save`` via a temp
+    file on disk when PyTorch is active, and falls back to streamed pickle.
     """
     try:
         raw_json = json.dumps(state, sort_keys=True, ensure_ascii=False).encode("utf-8")
-        return "json", raw_json
+        writer.add_bytes(f"{member_prefix}.json", raw_json)
+        return
     except TypeError:
         pass
 
     torch_mod = sys.modules.get("torch")
     if torch_mod is not None and callable(getattr(torch_mod, "save", None)):
-        buf = io.BytesIO()
-        torch_mod.save(state, buf)
-        return "pt", buf.getvalue()
+        tmp_file = scratch_dir / f"{Path(member_prefix).name}.pt"
+        torch_mod.save(state, tmp_file)
+        writer.add_file(f"{member_prefix}.pt", tmp_file, delete_after_write=True)
+        return
 
-    return "pkl", pickle.dumps(state, protocol=pickle.HIGHEST_PROTOCOL)
+    tmp_file = scratch_dir / f"{Path(member_prefix).name}.pkl"
+    with tmp_file.open("wb") as f:
+        pickle.dump(state, f, protocol=pickle.HIGHEST_PROTOCOL)
+    writer.add_file(f"{member_prefix}.pkl", tmp_file, delete_after_write=True)
 
 
 def _serialize_run(run: Any) -> dict[str, Any]:
@@ -103,6 +114,7 @@ def export_experiment(
     checkpoint_paths: Iterable[str | Path] = (),
     assets: Mapping[str, str | Path] | None = None,
     include_optimizer_state: bool = True,
+    base_model_ref: str | None = None,
     extra_metadata: Mapping[str, Any] | None = None,
 ) -> Path:
     """Export an ``Experiment`` snapshot into a single portable ``.rfx`` ZIP archive.
@@ -152,55 +164,69 @@ def export_experiment(
     }
     writer.add_json("config.json", config_payload)
 
-    # 2. Standard+: runs + component/optimizer states + external checkpoint files.
-    if profile in ("standard", "portable", "full"):
-        runs_payload = [_serialize_run(r) for r in getattr(experiment, "runs", ())]
-        writer.add_json("runs.json", runs_payload)
+    # 2. Standard+: runs + streamed component/optimizer states + external checkpoints.
+    with tempfile.TemporaryDirectory(prefix="reframx_stage_") as scratch:
+        scratch_dir = Path(scratch)
+        if profile in ("standard", "portable", "full"):
+            runs_payload = [_serialize_run(r) for r in getattr(experiment, "runs", ())]
+            writer.add_json("runs.json", runs_payload)
 
-        for handle in handles:
-            state = _extract_component_state(handle.instance)
-            if state is not None:
-                ext, raw = _encode_state_payload(state)
-                writer.add_bytes(f"checkpoints/{handle.role}.{ext}", raw)
-
-        if include_optimizer_state:
-            for opt_name, opt in getattr(experiment, "optimizers", {}).items():
-                state = _extract_component_state(opt)
+            for handle in handles:
+                state = _extract_component_state(handle.instance)
                 if state is not None:
-                    ext, raw = _encode_state_payload(state)
-                    writer.add_bytes(f"checkpoints/optimizer_{opt_name}.{ext}", raw)
+                    _stage_state_entry(
+                        writer,
+                        f"checkpoints/{handle.role}",
+                        state,
+                        scratch_dir=scratch_dir,
+                    )
 
-        for ckpt_path in checkpoint_paths:
-            src = Path(ckpt_path)
-            writer.add_file(f"checkpoints/files/{src.name}", src)
+            if include_optimizer_state:
+                for opt_name, opt in getattr(experiment, "optimizers", {}).items():
+                    state = _extract_component_state(opt)
+                    if state is not None:
+                        _stage_state_entry(
+                            writer,
+                            f"checkpoints/optimizer_{opt_name}",
+                            state,
+                            scratch_dir=scratch_dir,
+                        )
 
-    # 3. Portable+: user assets (files or directories).
-    if profile in ("portable", "full") and assets:
-        for asset_name, asset_path in assets.items():
-            src = Path(asset_path)
-            if src.is_dir():
-                writer.add_directory(f"assets/{asset_name}", src)
-            else:
-                writer.add_file(f"assets/{asset_name}", src)
+            for ckpt_path in checkpoint_paths:
+                src = Path(ckpt_path)
+                writer.add_file(f"checkpoints/files/{src.name}", src)
 
-    # 4. Full: run artifacts (instrumentation records, custom artifacts).
-    if profile == "full":
-        all_artifacts: dict[str, Any] = {}
-        for run in getattr(experiment, "runs", ()):
-            if run.artifacts:
-                all_artifacts[run.run_id] = _serialize_json_safe(run.artifacts)
-        if all_artifacts:
-            writer.add_json("artifacts/run_artifacts.json", all_artifacts)
+        # 3. Portable+: user assets (files or directories).
+        if profile in ("portable", "full") and assets:
+            for asset_name, asset_path in assets.items():
+                src = Path(asset_path)
+                if src.is_dir():
+                    writer.add_directory(f"assets/{asset_name}", src)
+                else:
+                    writer.add_file(f"assets/{asset_name}", src)
 
-    # Finalize manifest with SHA-256 inventory of every written member.
-    manifest = ArchiveManifest(
-        experiment_name=experiment.name,
-        profile=profile,
-        framework_version=framework_version,
-        components=tuple(component_records),
-        environment=collect_environment_info(),
-        files=writer.checksums,
-        metadata=_serialize_json_safe(extra_metadata or {}),
-    )
-    writer.add_json("manifest.json", manifest.to_dict())
-    return writer.write(destination)
+        # 4. Full: run artifacts (instrumentation records, custom artifacts).
+        if profile == "full":
+            all_artifacts: dict[str, Any] = {}
+            for run in getattr(experiment, "runs", ()):
+                if run.artifacts:
+                    all_artifacts[run.run_id] = _serialize_json_safe(run.artifacts)
+            if all_artifacts:
+                writer.add_json("artifacts/run_artifacts.json", all_artifacts)
+
+        manifest_meta = _serialize_json_safe(extra_metadata or {})
+        if base_model_ref is not None:
+            manifest_meta["base_model_ref"] = base_model_ref
+
+        # Finalize manifest with SHA-256 inventory of every written member.
+        manifest = ArchiveManifest(
+            experiment_name=experiment.name,
+            profile=profile,
+            framework_version=framework_version,
+            components=tuple(component_records),
+            environment=collect_environment_info(),
+            files=writer.checksums,
+            metadata=manifest_meta,
+        )
+        writer.add_json("manifest.json", manifest.to_dict())
+        return writer.write(destination)

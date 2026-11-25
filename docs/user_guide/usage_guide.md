@@ -117,8 +117,22 @@ class DualOptimMethod(rf.BaseMethod):
 
 ### Strategy
 - `rf.StandardBackwardStrategy(grad_accumulation_steps=1)`: backend-agnostic duck-typed `.backward()` / `.step()` / `.zero_grad()`.
-- `TorchStrategy(device="auto", precision="fp16", max_grad_norm=1.0, grad_accumulation_steps=1)`:
-  - Automatically moves model and batches to `"cuda"` / `"mps"` / `"cpu"`.
+- `TorchStrategy`:
+  ```python
+  from reframx.integrations.pytorch import TorchStrategy
+
+  strategy = TorchStrategy(
+      device="auto",
+      precision="bf16",
+      max_grad_norm=1.0,
+      grad_accumulation_steps=1,
+      auto_move_model=True,          # set False for bitsandbytes 4/8-bit, device_map="auto", or mixed-dtype models
+      skip_nonfinite_grads=True,     # skip optimizer step & zero_grad on NaN/Inf gradients
+      schedulers=lr_scheduler,       # single scheduler or dict[name, scheduler]
+      scheduler_step_on="step",      # "step" or "epoch"
+  )
+  ```
+  - Automatically logs `grad_norm` (`ctx.log_metric("grad_norm", norm)`) whenever gradient clipping is enabled, and `grad_skipped=1.0` when `skip_nonfinite_grads=True` skips a non-finite step.
   - Automatically enables `GradScaler` for `fp16` on CUDA and unscales gradients before clipping.
 
 ### Execution Backends (Swappable Without Changing User Code)
@@ -141,6 +155,30 @@ class DualOptimMethod(rf.BaseMethod):
       },
   )
   ```
+
+### Step-Based Training, Resuming, Eval Mode & History Capping
+`experiment.run(...)` supports epoch-based and native step-based loops, resuming from checkpoints or `.rfx` archives, frozen-backbone eval mode during training, and bounded RAM history:
+
+```python
+# Epoch-based (default)
+run = experiment.run(max_epochs=10, eval_every_epochs=1)
+
+# Native step-based (automatically cycles the training dataloader until max_steps)
+run = experiment.run(
+    max_steps=50_000,
+    eval_every_steps=500,
+    keep_eval_mode=True,       # keep model.eval() during training (e.g. LoRA / frozen backbone)
+    max_train_history=1000,    # ring-buffer cap on run.train_history to prevent RAM bloat
+)
+
+# Resume from a CheckpointHook file or an exported .rfx snapshot
+run = experiment.run(
+    max_steps=100_000,
+    resume_from="work_dir/latest.pt",  # restores model, optimizers, StateProvider components, global_step & epoch
+)
+```
+
+Standalone `experiment.evaluate()` automatically prepares the model and runs `method.setup(ctx)` (idempotently), and respects `experiment.stop()` mid-evaluation.
 
 ### Stopping Training Early & Safe Interrupt Export
 - **Ctrl+C (`KeyboardInterrupt`):** pass `catch_interrupt=True` to `experiment.run(...)` so interrupting returns `Run(status=RunStatus.INTERRUPTED)` cleanly and lets subsequent `experiment.export(...)` run.
@@ -166,13 +204,49 @@ hidden = rf.probe("encoder/hidden", hidden)
 
 # 2. Non-invasive module hooks by object reference or glob pattern
 inst = rf.InstrumentationManager(max_records=500)
-inst.watch_probe("encoder/*", rf.tensor_stats, every_n_steps=10)
+# Use reduce="mean" | "min" | "max" | "list" | "last" when a probe fires multiple times per step
+# (e.g., across 32 transformer layers or multi-turn rollouts)
+inst.watch_probe("encoder/*", rf.tensor_stats, every_n_steps=10, reduce="mean")
 inst.watch_probe("encoder/*", lambda ev: rf.check_nan_inf(ev, raise_on_error=True))
-inst.watch_modules(raw_model, pattern="*.attn", stages=("post_forward", "backward"), callback=rf.tensor_stats)
+inst.watch_modules(raw_model, pattern="*.attn", stages=("post_forward", "backward"), callback=rf.tensor_stats, reduce="mean")
 
 exp = rf.Experiment(..., hooks=[rf.InstrumentationHook(inst)])
 run = exp.run(max_epochs=5)
 # Recorded metrics are stored in run.train_history and run.artifacts["instrumentation"]
+```
+
+---
+
+## 4.5 Batteries-Included Hooks (`reframx.hooks`)
+
+Lightweight, zero-dependency lifecycle hooks ready for any research repo:
+
+```python
+from reframx.hooks import (
+    CheckpointHook,
+    ConsoleLoggerHook,
+    FileControlHook,
+    JSONLLoggerHook,
+    load_checkpoint,
+)
+from reframx.integrations.pytorch import CudaMemoryHook
+
+hooks = [
+    CheckpointHook(
+        save_dir="runs/exp01/ckpts",
+        save_every_steps=500,
+        monitor="val_loss",
+        mode="min",
+        save_on_exception=True,        # emergency save on crash / OOM via on_exception(ctx, exc)
+    ),
+    JSONLLoggerHook("runs/exp01/metrics.jsonl"),
+    ConsoleLoggerHook(every_n_steps=50),
+    FileControlHook(
+        control_file="runs/exp01/control.json",          # write {"stop": true, "reason": "..."} to stop gracefully
+        live_hparams_file="runs/exp01/live_hparams.json", # hot-reload {"lr": 1e-4} during training
+    ),
+    CudaMemoryHook(every_n_steps=100, empty_cache_every_steps=500),
+]
 ```
 
 ---
@@ -222,12 +296,13 @@ An `.rfx` file is an **unencrypted standard ZIP archive** written atomically wit
 | `full` | `portable` + `artifacts/` (instrumentation records, logs, run artifacts) |
 
 ```python
-# Export an experiment snapshot
+# Export an experiment snapshot (streams large model weights via temp files to avoid RAM OOM)
 path = experiment.export(
     "outputs/exp_01.rfx",
     profile="full",
     checkpoint_paths=["work_dirs/best_accuracy_epoch_2.pth"],
     assets={"vocab": "path/to/vocab.txt"},
+    base_model_ref="meta-llama/Llama-3.1-8B",  # optional base-model reference recorded in manifest.metadata
 )
 
 # Load safely (never auto-installs packages or executes plugins)

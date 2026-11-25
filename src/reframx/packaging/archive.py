@@ -38,11 +38,24 @@ def sha256_bytes(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def sha256_file(path: Path, *, chunk_size: int = 1024 * 1024) -> str:
+    """Compute SHA-256 of a file incrementally without loading it into RAM."""
+    hasher = hashlib.sha256()
+    with path.open("rb") as f:
+        while True:
+            chunk = f.read(chunk_size)
+            if not chunk:
+                break
+            hasher.update(chunk)
+    return hasher.hexdigest()
+
+
 class RFXArchiveWriter:
-    """Stages archive entries and writes an ``.rfx`` ZIP file atomically."""
+    """Stages archive entries (bytes or streamed disk files) and writes atomically."""
 
     def __init__(self) -> None:
         self._entries: dict[str, bytes] = {}
+        self._file_entries: dict[str, tuple[Path, bool]] = {}
         self._checksums: dict[str, str] = {}
 
     @property
@@ -52,6 +65,7 @@ class RFXArchiveWriter:
     def add_bytes(self, member_name: str, data: bytes) -> str:
         clean = _validate_member_name(member_name)
         self._entries[clean] = data
+        self._file_entries.pop(clean, None)
         digest = sha256_bytes(data)
         self._checksums[clean] = digest
         return digest
@@ -66,11 +80,23 @@ class RFXArchiveWriter:
         ).encode("utf-8")
         return self.add_bytes(member_name, encoded)
 
-    def add_file(self, member_name: str, source_path: str | Path) -> str:
+    def add_file(
+        self,
+        member_name: str,
+        source_path: str | Path,
+        *,
+        delete_after_write: bool = False,
+    ) -> str:
+        """Register a file to be streamed directly from disk into the ZIP archive."""
         src = Path(source_path)
         if not src.is_file():
             raise ArchiveError(f"Cannot pack missing file: {src}")
-        return self.add_bytes(member_name, src.read_bytes())
+        clean = _validate_member_name(member_name)
+        self._entries.pop(clean, None)
+        self._file_entries[clean] = (src, delete_after_write)
+        digest = sha256_file(src)
+        self._checksums[clean] = digest
+        return digest
 
     def add_directory(self, member_prefix: str, source_dir: str | Path) -> None:
         root = Path(source_dir)
@@ -93,9 +119,14 @@ class RFXArchiveWriter:
         tmp_path = target.with_name(f".{target.name}.{os.getpid()}.tmp")
 
         try:
+            all_names = sorted({*self._entries.keys(), *self._file_entries.keys()})
             with zipfile.ZipFile(tmp_path, mode="w", compression=compression) as zf:
-                for member_name in sorted(self._entries.keys()):
-                    zf.writestr(member_name, self._entries[member_name])
+                for member_name in all_names:
+                    if member_name in self._entries:
+                        zf.writestr(member_name, self._entries[member_name])
+                    else:
+                        src_path, _ = self._file_entries[member_name]
+                        zf.write(src_path, arcname=member_name)
 
             # Verify archive integrity before committing into place.
             with zipfile.ZipFile(tmp_path, mode="r") as zf:
@@ -110,6 +141,10 @@ class RFXArchiveWriter:
             if tmp_path.exists():
                 tmp_path.unlink(missing_ok=True)
             raise
+        finally:
+            for src_path, should_delete in self._file_entries.values():
+                if should_delete and src_path.exists():
+                    src_path.unlink(missing_ok=True)
 
         return target
 

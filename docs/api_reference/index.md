@@ -29,17 +29,19 @@
 ### Execution, Experiments & Hooks
 | Symbol | Description |
 |---|---|
-| `Experiment` | Composes components; provides `validate()`, `run(..., catch_interrupt=False)`, `stop(reason=...)`, `evaluate()`, `export()`. |
+| `Experiment` | Composes components; provides `validate()`, `run(max_epochs=..., max_steps=..., eval_every_epochs=..., eval_every_steps=..., start_step=..., start_epoch=..., resume_from=..., keep_eval_mode=False, max_train_history=None, catch_interrupt=False)`, `restore_state(state)`, `stop(reason=...)`, `evaluate()`, `export(..., base_model_ref=None)`. |
 | `Run`, `RunStatus` | Execution record (`run_id`, `status`: `CREATED`/`RUNNING`/`COMPLETED`/`INTERRUPTED`/`FAILED`, `train_history`, `eval_history`, `epoch_history`, `artifacts`). |
 | `ExecutionContext`, `ExecutionState` | Runtime context passed to Methods and Hooks (`backward`, `step`, `zero_grad`, `log_metric`, `request_stop`). |
 | `ExecutionBackend`, `NativeBackend`, `ExecutionEngine` | Pluggable execution backend protocol and default zero-dependency engine. |
-| `BaseHook` | Optional convenience base class for lifecycle plugins. |
+| `BaseHook` | Optional convenience base class for lifecycle plugins (including `on_exception(ctx, exc)`). |
+| `CheckpointHook`, `load_checkpoint` | Atomic step/epoch/best checkpointing with optional emergency save on exception (also in `reframx.hooks`). |
+| `JSONLLoggerHook`, `ConsoleLoggerHook`, `FileControlHook` | Built-in JSONL metric logging, console progress printing, and file-based stop / live hparam hot-reload (also in `reframx.hooks`). |
 
 ### Instrumentation
 | Symbol | Description |
 |---|---|
 | `Probe`, `probe(name, value)` | Zero-overhead pass-through tensor/value probes using `contextvars`. |
-| `InstrumentationManager`, `InstrumentationHook` | Manages probe subscriptions, `watch_module`, `watch_modules`, sampling, and automatic cleanup. |
+| `InstrumentationManager`, `InstrumentationHook` | Manages probe subscriptions, `watch_module`, `watch_modules` (with `reduce="last" \| "mean" \| "min" \| "max" \| "list"`), sampling, and automatic cleanup. |
 | `InstrumentationEvent`, `InstrumentationRecord`, `WatchHandle` | Event payloads, recorded measurements, and removable handles. |
 | `tensor_stats`, `check_nan_inf` | Built-in summary statistics and NaN/Inf diagnostics. |
 
@@ -64,7 +66,8 @@
 ## 2. PyTorch Integration (`reframx.integrations.pytorch`)
 
 - **Adapters:** `TorchModelAdapter`, `TorchDatasetAdapter`, `TorchLossAdapter`
-- **Strategy:** `TorchStrategy` (`device`, `precision`, `grad_accumulation_steps`, `max_grad_norm`, `auto_move_batch`, `autocast_context`)
+- **Strategy:** `TorchStrategy` (`device`, `precision`, `grad_accumulation_steps`, `max_grad_norm`, `auto_move_batch`, `auto_move_model`, `skip_nonfinite_grads`, `schedulers`, `scheduler_step_on`, `autocast_context`)
+- **Hooks:** `CudaMemoryHook` (`every_n_steps`, `empty_cache_every_steps`, `reset_peak_stats`)
 - **Built-in Objectives:** `CrossEntropyObjective`, `BCEWithLogitsObjective`, `MSEObjective`
 - **Built-in Methods:** `TorchSupervisedMethod`, `TorchClassificationMethod`, `TorchRegressionMethod`
 - **Built-in Evaluators:** `TorchAccuracyEvaluator`, `TorchRegressionEvaluator`

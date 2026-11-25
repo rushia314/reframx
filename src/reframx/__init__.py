@@ -15,6 +15,7 @@ from reframx.api import (
     BaseTask,
     Capability,
     CausalLMTask,
+    CheckpointHook,
     ClassificationTask,
     ComponentHandle,
     ComponentIntegrationError,
@@ -23,6 +24,7 @@ from reframx.api import (
     ComponentSpec,
     ComponentValidator,
     ConfigProvider,
+    ConsoleLoggerHook,
     DatasetFieldAdapter,
     DatasetProtocol,
     DatasetSpec,
@@ -36,6 +38,7 @@ from reframx.api import (
     ExecutionState,
     Experiment,
     ExportProfile,
+    FileControlHook,
     ImportedExperiment,
     InstrumentationEvent,
     InstrumentationHook,
@@ -43,6 +46,7 @@ from reframx.api import (
     InstrumentationRecord,
     InvalidSpecificationError,
     IOContract,
+    JSONLLoggerHook,
     LoadedPlugin,
     MethodResult,
     MethodSpec,
@@ -81,6 +85,7 @@ from reframx.api import (
     default_plugin_manager,
     default_registry,
     export_experiment,
+    load_checkpoint,
     load_experiment,
     probe,
     run_component_validator,
@@ -88,7 +93,7 @@ from reframx.api import (
     validate_requirements,
 )
 
-__version__ = "0.1.1"
+__version__ = "0.2.0"
 
 __all__ = [
     "__version__",
@@ -104,6 +109,7 @@ __all__ = [
     "BaseTask",
     "Capability",
     "CausalLMTask",
+    "CheckpointHook",
     "ClassificationTask",
     "ComponentHandle",
     "ComponentIntegrationError",
@@ -112,6 +118,7 @@ __all__ = [
     "ComponentSpec",
     "ComponentValidator",
     "ConfigProvider",
+    "ConsoleLoggerHook",
     "DEFAULT_ENTRY_POINT_GROUP",
     "DatasetFieldAdapter",
     "DatasetProtocol",
@@ -126,6 +133,7 @@ __all__ = [
     "ExecutionState",
     "Experiment",
     "ExportProfile",
+    "FileControlHook",
     "IOContract",
     "ImportedExperiment",
     "InstrumentationEvent",
@@ -133,6 +141,7 @@ __all__ = [
     "InstrumentationManager",
     "InstrumentationRecord",
     "InvalidSpecificationError",
+    "JSONLLoggerHook",
     "LoadedPlugin",
     "MethodResult",
     "MethodSpec",
@@ -172,6 +181,7 @@ __all__ = [
     "default_plugin_manager",
     "default_registry",
     "export_experiment",
+    "load_checkpoint",
     "load_experiment",
     "probe",
     "run_component_validator",

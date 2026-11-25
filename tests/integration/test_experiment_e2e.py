@@ -416,3 +416,54 @@ def test_experiment_stop_method_stops_training_gracefully():
     assert run.error == "user_clicked_stop"
     assert len(run.train_history) == 2
     assert exp.stop() is False  # Already finished
+
+
+def test_step_based_training_cycles_epochs_and_runs_eval_every_steps():
+    raw_model = LinearScalarModel(w=0.0)
+    opt = SimpleOptimizer([raw_model.w], lr=0.1)
+
+    train_modes_seen: list[bool] = []
+
+    class ModeCheckHook(rf.BaseHook):
+        def on_step_start(self, ctx: rf.ExecutionContext, batch) -> None:
+            train_modes_seen.append(raw_model.training)
+
+    exp = rf.Experiment(
+        name="StepBased",
+        task=rf.BaseTask(requirements="prediction"),
+        method=RegressionSupervisedMethod(),
+        model=rf.ModelAdapter(raw_model, capabilities="predict"),
+        dataset=rf.BaseDataset(
+            capabilities=["x", "y"],
+            splits_data={
+                # Only 2 batches per epoch -> 5 steps requires cycling 3 epochs!
+                "train": [{"x": 1.0, "y": 2.0}, {"x": 2.0, "y": 4.0}],
+                "val": [{"x": 3.0, "y": 6.0}],
+            },
+        ),
+        objectives=SquaredErrorObjective(),
+        optimizers=opt,
+        evaluator=MeanAbsErrorEvaluator(),
+        hooks=[ModeCheckHook()],
+    )
+
+    run = exp.run(max_steps=5, eval_every_steps=2)
+    assert run.status is rf.RunStatus.COMPLETED
+    assert len(run.train_history) == 5
+    # Eval ran strictly at steps 2 and 4 (mid-epoch & end-of-epoch).
+    assert [entry["step"] for entry in run.eval_history] == [2, 4]
+    # Model was always restored back to train mode after mid-epoch eval.
+    assert train_modes_seen == [True, True, True, True, True]
+    assert run.eval_history[-1]["mae"] < run.eval_history[0]["mae"]
+
+    # Empty train split in step-based mode raises instead of infinite-looping.
+    empty_exp = rf.Experiment(
+        task=rf.BaseTask(requirements="prediction"),
+        method=RegressionSupervisedMethod(),
+        model=rf.ModelAdapter(LinearScalarModel(), capabilities="predict"),
+        dataset=rf.BaseDataset(capabilities=["x", "y"], splits_data={"train": []}),
+        objectives=SquaredErrorObjective(),
+        optimizers=SimpleOptimizer([]),
+    )
+    with pytest.raises(ValueError, match="yielded 0 batches"):
+        empty_exp.run(max_steps=3, eval_split=None)

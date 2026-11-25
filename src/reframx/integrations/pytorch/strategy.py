@@ -1,8 +1,9 @@
-"""PyTorch execution/optimization Strategy (device, AMP, grad clipping, accum)."""
+"""PyTorch execution/optimization Strategy (device, AMP, grad clipping, schedulers)."""
 
 from __future__ import annotations
 
 import contextlib
+import math
 from collections.abc import Callable, Generator, Mapping
 from typing import Any, Literal
 
@@ -16,19 +17,31 @@ from reframx.integrations.pytorch.utils import (
 from reframx.strategies.interface import StandardBackwardStrategy
 
 PrecisionMode = Literal["fp32", "fp16", "bf16"]
+SchedulerStepOn = Literal["step", "epoch"]
+
+
+def _normalize_schedulers(value: Any | Mapping[str, Any] | None) -> dict[str, Any]:
+    if value is None:
+        return {}
+    if isinstance(value, Mapping):
+        return dict(value)
+    return {"default": value}
 
 
 class TorchStrategy(StandardBackwardStrategy):
-    """PyTorch-native Strategy handling device placement, AMP, and grad clipping.
+    """PyTorch-native Strategy handling device placement, AMP, grad clipping, and schedulers.
 
     Supports:
     - Automatic or explicit device placement (``"auto"``, ``"cpu"``, ``"cuda"``, ...).
-    - Automatic batch transfer via ``prepare_batch`` (disable with
-      ``auto_move_batch=False`` for custom batch handling).
+    - ``auto_move_model=False`` for quantized (bitsandbytes 4-bit/8-bit),
+      ``device_map="auto"``, or mixed-dtype models that must not have ``.to(device)`` called.
+    - Automatic batch transfer via ``prepare_batch`` (disable with ``auto_move_batch=False``).
     - Mixed precision (``"fp32"``, ``"fp16"``, ``"bf16"``) with ``GradScaler``
       automatically enabled for ``fp16`` on CUDA.
-    - Gradient accumulation (``grad_accumulation_steps``) and gradient norm
-      clipping (``max_grad_norm``).
+    - Gradient accumulation (``grad_accumulation_steps``), gradient norm clipping
+      (``max_grad_norm``, automatically logging ``grad_norm``), and
+      ``skip_nonfinite_grads=True`` to skip optimizer updates on NaN/Inf gradients.
+    - Optional LR ``schedulers`` stepped per optimizer step or per epoch.
     """
 
     def __init__(
@@ -38,8 +51,12 @@ class TorchStrategy(StandardBackwardStrategy):
         precision: PrecisionMode = "fp32",
         grad_accumulation_steps: int = 1,
         max_grad_norm: float | None = None,
+        skip_nonfinite_grads: bool = False,
+        auto_move_model: bool = True,
         auto_move_batch: bool = True,
         non_blocking: bool = False,
+        schedulers: Any | Mapping[str, Any] | None = None,
+        scheduler_step_on: SchedulerStepOn = "step",
         on_before_step: Callable[[Any, Any], None] | None = None,
         metadata: ComponentMetadata | None = None,
         attributes: Mapping[str, Any] | None = None,
@@ -50,13 +67,19 @@ class TorchStrategy(StandardBackwardStrategy):
             )
         if max_grad_norm is not None and max_grad_norm <= 0:
             raise ValueError("max_grad_norm must be > 0 when specified.")
+        if scheduler_step_on not in ("step", "epoch"):
+            raise ValueError("scheduler_step_on must be 'step' or 'epoch'.")
 
         self._torch = require_torch()
         self.device = resolve_device(device)
         self.precision: PrecisionMode = precision
         self.max_grad_norm = max_grad_norm
+        self.skip_nonfinite_grads = skip_nonfinite_grads
+        self.auto_move_model = auto_move_model
         self.auto_move_batch = auto_move_batch
         self.non_blocking = non_blocking
+        self.schedulers: dict[str, Any] = _normalize_schedulers(schedulers)
+        self.scheduler_step_on: SchedulerStepOn = scheduler_step_on
 
         self._use_amp = precision in ("fp16", "bf16")
         self._amp_dtype = (
@@ -78,10 +101,11 @@ class TorchStrategy(StandardBackwardStrategy):
                 "device": str(self.device),
                 "precision": precision,
                 "max_grad_norm": max_grad_norm,
+                "skip_nonfinite_grads": skip_nonfinite_grads,
+                "auto_move_model": auto_move_model,
                 **dict(attributes or {}),
             },
         )
-        # Re-export PyTorch-specific capabilities alongside base capabilities.
         self._spec = type(self._spec)(
             metadata=self._spec.metadata,
             requirements=self._spec.requirements,
@@ -98,8 +122,8 @@ class TorchStrategy(StandardBackwardStrategy):
         return self._scaler
 
     def prepare_model(self, model: Any) -> Any:
-        if model is None:
-            return None
+        if model is None or not self.auto_move_model:
+            return model
         target = getattr(model, "module", model)
         to_fn = getattr(target, "to", None)
         if callable(to_fn):
@@ -140,16 +164,67 @@ class TorchStrategy(StandardBackwardStrategy):
         else:
             scaled_loss.backward()
 
-    def _clip_gradients(self, optimizer: Any) -> None:
-        if self.max_grad_norm is None:
-            return
+    def _collect_grad_params(self, optimizer: Any) -> list[Any]:
         params: list[Any] = []
         for group in getattr(optimizer, "param_groups", ()):
             for param in group.get("params", ()):
                 if getattr(param, "grad", None) is not None:
                     params.append(param)
-        if params:
-            self._torch.nn.utils.clip_grad_norm_(params, self.max_grad_norm)
+        return params
+
+    def _has_nonfinite_grads(self, params: list[Any]) -> bool:
+        isfinite = getattr(self._torch, "isfinite", None)
+        for param in params:
+            grad = param.grad
+            if callable(isfinite) and isinstance(grad, self._torch.Tensor):
+                if not bool(isfinite(grad).all().item()):
+                    return True
+            else:
+                item = getattr(grad, "item", None)
+                if callable(item) and not math.isfinite(float(item())):
+                    return True
+        return False
+
+    def _clip_gradients(self, params: list[Any], ctx: Any) -> float | None:
+        if self.max_grad_norm is None or not params:
+            return None
+        raw_norm = self._torch.nn.utils.clip_grad_norm_(params, self.max_grad_norm)
+        norm = float(raw_norm.item() if hasattr(raw_norm, "item") else raw_norm)
+        if ctx is not None:
+            log_fn = getattr(ctx, "log_metric", None)
+            if callable(log_fn):
+                log_fn("grad_norm", norm)
+            state = getattr(ctx, "state", None)
+            if state is not None:
+                state.extra["last_grad_norm"] = norm
+        return norm
+
+    def _step_matching_schedulers(self, optimizer: Any) -> None:
+        if not self.schedulers:
+            return
+        matched = [
+            sched
+            for sched in self.schedulers.values()
+            if getattr(sched, "optimizer", None) is optimizer
+        ]
+        targets = matched if matched else (
+            [self.schedulers["default"]]
+            if "default" in self.schedulers
+            else list(self.schedulers.values())
+        )
+        for sched in targets:
+            step_fn = getattr(sched, "step", None)
+            if callable(step_fn):
+                step_fn()
+
+    def on_epoch_end(self, ctx: Any, epoch_summary: Mapping[str, Any]) -> None:
+        """Step epoch-level LR schedulers when ``scheduler_step_on == 'epoch'``."""
+        if self.scheduler_step_on != "epoch" or not self.schedulers:
+            return
+        for sched in self.schedulers.values():
+            step_fn = getattr(sched, "step", None)
+            if callable(step_fn):
+                step_fn()
 
     def optimizer_step(
         self,
@@ -168,7 +243,21 @@ class TorchStrategy(StandardBackwardStrategy):
         if self._scaler is not None:
             self._scaler.unscale_(optimizer)
 
-        self._clip_gradients(optimizer)
+        params = self._collect_grad_params(optimizer)
+        grad_norm = self._clip_gradients(params, ctx)
+
+        if self.skip_nonfinite_grads:
+            nonfinite = (
+                grad_norm is not None and not math.isfinite(grad_norm)
+            ) or self._has_nonfinite_grads(params)
+            if nonfinite:
+                if ctx is not None and callable(getattr(ctx, "log_metric", None)):
+                    ctx.log_metric("skipped_nonfinite_step", 1)
+                if zero_grad:
+                    self.zero_grad(optimizer, ctx)
+                if self._scaler is not None:
+                    self._scaler.update()
+                return False
 
         if self.on_before_step is not None:
             self.on_before_step(optimizer, ctx)
@@ -178,6 +267,9 @@ class TorchStrategy(StandardBackwardStrategy):
             self._scaler.update()
         else:
             optimizer.step()
+
+        if self.scheduler_step_on == "step":
+            self._step_matching_schedulers(optimizer)
 
         if zero_grad:
             self.zero_grad(optimizer, ctx)

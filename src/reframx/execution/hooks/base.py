@@ -34,8 +34,11 @@ class BaseHook:
     def on_epoch_end(self, ctx: Any, epoch_metrics: Mapping[str, Any]) -> None:
         """Called at the end of each epoch."""
 
+    def on_exception(self, ctx: Any, exc: BaseException) -> None:
+        """Called when an unhandled exception occurs (e.g. OOM) before re-raising."""
+
     def on_run_end(self, ctx: Any, run: Any) -> None:
-        """Called once when a run finishes (completed or failed)."""
+        """Called once when a run finishes (completed, interrupted, or failed)."""
 
 
 def dispatch_hooks(hooks: list[Any], event_name: str, *args: Any) -> None:

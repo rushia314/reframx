@@ -75,6 +75,17 @@ class ExecutionEngine:
 
     def __init__(self, ctx: ExecutionContext) -> None:
         self.ctx = ctx
+        self._prepared = False
+
+    def _ensure_prepared(self) -> None:
+        if self._prepared:
+            return
+        ctx = self.ctx
+        ctx.model = ctx.strategy.prepare_model(ctx.model)
+        setup_fn = getattr(ctx.method, "setup", None)
+        if callable(setup_fn):
+            setup_fn(ctx)
+        self._prepared = True
 
     def evaluate(self, *, split: str = "val") -> dict[str, Any]:
         """Run one evaluation pass over ``split`` and return aggregated metrics."""
@@ -87,6 +98,7 @@ class ExecutionEngine:
             return {}
         eval_step = ctx.method.eval_step
 
+        self._ensure_prepared()
         prev_phase = ctx.state.phase
         ctx.state.phase = "eval"
         ctx.strategy.set_model_mode(ctx.model, training=False)
@@ -101,6 +113,8 @@ class ExecutionEngine:
         step_records: list[dict[str, Any]] = []
         with ctx.strategy.eval_context():
             for batch in batches:
+                if ctx.state.should_stop:
+                    break
                 ctx.step_metrics.clear()
                 prepared_batch = ctx.strategy.prepare_batch(batch, ctx)
                 result = _normalize_result(eval_step(prepared_batch, ctx))
@@ -133,42 +147,84 @@ class ExecutionEngine:
     def run(
         self,
         *,
-        max_epochs: int = 1,
+        max_epochs: int | None = None,
         max_steps: int | None = None,
         train_split: str = "train",
         eval_split: str | None = "val",
-        eval_every_epochs: int = 1,
+        eval_every_epochs: int | None = None,
+        eval_every_steps: int | None = None,
+        start_step: int = 0,
+        start_epoch: int = 0,
+        keep_eval_mode: bool = False,
+        max_train_history: int | None = None,
         catch_interrupt: bool = False,
     ) -> Run:
-        """Execute training (and optional evaluation) and return the populated ``Run``."""
-        if max_epochs < 1:
-            raise ValueError("max_epochs must be >= 1.")
+        """Execute training (epoch-based or step-based) and return the ``Run``.
+
+        - Pass ``max_epochs`` for epoch-based training (defaults to 1 if neither
+          ``max_epochs`` nor ``max_steps`` is given).
+        - Pass ``max_steps`` (without ``max_epochs``) for pure step-based
+          training, cycling through the training split automatically.
+        - Pass ``eval_every_steps`` to run mid-epoch evaluation every N steps,
+          and/or ``eval_every_epochs`` for end-of-epoch evaluation.
+        - Pass ``start_step`` / ``start_epoch`` to resume counters cleanly.
+        - Pass ``keep_eval_mode=True`` to keep ``model.eval()`` during training
+          (useful for LoRA / frozen backbones).
+        - Pass ``max_train_history`` to cap ``run.train_history`` as a ring buffer.
+        """
+        if max_epochs is None and max_steps is None:
+            max_epochs = 1
+        if max_epochs is not None and max_epochs < 1:
+            raise ValueError("max_epochs must be >= 1 when specified.")
         if max_steps is not None and max_steps < 1:
             raise ValueError("max_steps must be >= 1 when specified.")
-        if eval_every_epochs < 1:
-            raise ValueError("eval_every_epochs must be >= 1.")
+        if eval_every_epochs is not None and eval_every_epochs < 1:
+            raise ValueError("eval_every_epochs must be >= 1 when specified.")
+        if eval_every_steps is not None and eval_every_steps < 1:
+            raise ValueError("eval_every_steps must be >= 1 when specified.")
+        if start_step < 0 or start_epoch < 0:
+            raise ValueError("start_step and start_epoch must be >= 0.")
+        if max_train_history is not None and max_train_history < 1:
+            raise ValueError("max_train_history must be >= 1 when specified.")
+
+        # Default epoch-end eval in epoch-based mode for backwards compatibility.
+        if eval_every_epochs is None and eval_every_steps is None and max_steps is None:
+            eval_every_epochs = 1
 
         ctx = self.ctx
         run: Run = ctx.run
         if ctx.method is None:
             raise ValueError("Cannot execute without a Method.")
 
-        ctx.model = ctx.strategy.prepare_model(ctx.model)
-        setup_fn = getattr(ctx.method, "setup", None)
-        if callable(setup_fn):
-            setup_fn(ctx)
+        ctx.state.global_step = start_step
+        ctx.state.epoch = start_epoch
+        self._ensure_prepared()
 
         run.mark_running()
         dispatch_hooks(ctx.hooks, "on_run_start", ctx)
 
         try:
-            for epoch in range(1, max_epochs + 1):
+            epoch = start_epoch
+            last_eval_step = -1
+            while True:
+                if max_epochs is not None and epoch >= max_epochs:
+                    break
+                if ctx.state.should_stop or (
+                    max_steps is not None and ctx.state.global_step >= max_steps
+                ):
+                    break
+
+                epoch += 1
                 ctx.state.epoch = epoch
                 ctx.state.step_in_epoch = 0
                 ctx.state.phase = "train"
                 dispatch_hooks(ctx.hooks, "on_epoch_start", ctx)
 
-                ctx.strategy.set_model_mode(ctx.model, training=True)
+                if keep_eval_mode:
+                    ctx.strategy.set_model_mode(ctx.model, training=False)
+                else:
+                    ctx.strategy.set_model_mode(ctx.model, training=True)
+
                 train_batches = _resolve_split_iterable(ctx.dataset, train_split)
                 if train_batches is None:
                     raise ValueError(
@@ -176,6 +232,7 @@ class ExecutionEngine:
                     )
 
                 epoch_step_records: list[dict[str, Any]] = []
+                last_step_eval_metrics: dict[str, Any] = {}
                 for batch in train_batches:
                     ctx.state.global_step += 1
                     ctx.state.step_in_epoch += 1
@@ -194,6 +251,11 @@ class ExecutionEngine:
                         **ctx.step_metrics,
                     }
                     run.train_history.append(step_record)
+                    if (
+                        max_train_history is not None
+                        and len(run.train_history) > max_train_history
+                    ):
+                        del run.train_history[: len(run.train_history) - max_train_history]
                     epoch_step_records.append(step_record)
 
                     dispatch_hooks(
@@ -204,10 +266,27 @@ class ExecutionEngine:
                         result,
                     )
 
+                    if (
+                        eval_split is not None
+                        and eval_every_steps is not None
+                        and ctx.state.global_step % eval_every_steps == 0
+                    ):
+                        last_step_eval_metrics = self.evaluate(split=eval_split)
+                        last_eval_step = ctx.state.global_step
+                        ctx.state.phase = "train"
+                        if not keep_eval_mode:
+                            ctx.strategy.set_model_mode(ctx.model, training=True)
+
                     if ctx.state.should_stop or (
                         max_steps is not None and ctx.state.global_step >= max_steps
                     ):
                         break
+
+                if ctx.state.step_in_epoch == 0 and max_epochs is None:
+                    raise ValueError(
+                        f"Training split '{train_split}' yielded 0 batches; "
+                        f"cannot reach max_steps={max_steps}."
+                    )
 
                 epoch_summary: dict[str, Any] = {
                     "epoch": epoch,
@@ -221,18 +300,36 @@ class ExecutionEngine:
                     },
                 }
 
-                if eval_split is not None and epoch % eval_every_epochs == 0:
+                if (
+                    eval_split is not None
+                    and eval_every_epochs is not None
+                    and epoch % eval_every_epochs == 0
+                    and last_eval_step != ctx.state.global_step
+                ):
                     eval_metrics = self.evaluate(split=eval_split)
+                    last_eval_step = ctx.state.global_step
                     for k, v in eval_metrics.items():
                         epoch_summary[f"eval/{k}"] = v
+                elif last_step_eval_metrics:
+                    for k, v in last_step_eval_metrics.items():
+                        epoch_summary[f"eval/{k}"] = v
+
+                step_epoch_sched = getattr(ctx.strategy, "on_epoch_end", None)
+                if callable(step_epoch_sched):
+                    step_epoch_sched(ctx, epoch_summary)
 
                 run.epoch_history.append(epoch_summary)
                 dispatch_hooks(ctx.hooks, "on_epoch_end", ctx, epoch_summary)
 
-                if ctx.state.should_stop or (
-                    max_steps is not None and ctx.state.global_step >= max_steps
-                ):
-                    break
+            # In pure step-based mode with no explicit eval interval, run a final eval.
+            if (
+                eval_split is not None
+                and eval_every_steps is None
+                and eval_every_epochs is None
+                and not ctx.state.should_stop
+                and last_eval_step != ctx.state.global_step
+            ):
+                self.evaluate(split=eval_split)
 
             ctx.state.phase = "idle"
             stop_reason = ctx.state.extra.get("_stop_reason")
@@ -250,6 +347,7 @@ class ExecutionEngine:
         except BaseException as exc:
             ctx.state.phase = "idle"
             run.mark_failed(exc)
+            dispatch_hooks(ctx.hooks, "on_exception", ctx, exc)
             dispatch_hooks(ctx.hooks, "on_run_end", ctx, run)
             raise
 

@@ -143,15 +143,23 @@ class MMEngineBackend:
         self,
         ctx: ExecutionContext,
         *,
-        max_epochs: int = 1,
+        max_epochs: int | None = None,
         max_steps: int | None = None,
         train_split: str = "train",
         eval_split: str | None = "val",
-        eval_every_epochs: int = 1,
+        eval_every_epochs: int | None = None,
+        eval_every_steps: int | None = None,
+        start_step: int = 0,
+        start_epoch: int = 0,
+        keep_eval_mode: bool = False,
+        max_train_history: int | None = None,
         catch_interrupt: bool = False,
     ) -> Run:
         if ctx.method is None:
             raise ValueError("Cannot execute without a Method.")
+        ctx.state.global_step = start_step
+        ctx.state.epoch = start_epoch
+        ctx.state.extra["_max_train_history"] = max_train_history
         run: Run = ctx.run
 
         train_dl = _resolve_dataloader(ctx.dataset, train_split)
@@ -169,14 +177,18 @@ class MMEngineBackend:
         if self.by_epoch and max_steps is None:
             train_cfg: dict[str, Any] = {
                 "by_epoch": True,
-                "max_epochs": max_epochs,
-                "val_interval": eval_every_epochs,
+                "max_epochs": max_epochs if max_epochs is not None else 1,
+                "val_interval": eval_every_epochs if eval_every_epochs is not None else 1,
             }
         else:
             train_cfg = {
                 "by_epoch": False,
-                "max_iters": max_steps if max_steps is not None else max_epochs,
-                "val_interval": eval_every_epochs,
+                "max_iters": max_steps if max_steps is not None else (max_epochs or 1),
+                "val_interval": (
+                    eval_every_steps
+                    if eval_every_steps is not None
+                    else (eval_every_epochs if eval_every_epochs is not None else 1)
+                ),
             }
 
         val_cfg: dict[str, Any] | None = {} if val_dl is not None else None
@@ -212,6 +224,9 @@ class MMEngineBackend:
         except BaseException as exc:
             ctx.state.phase = "idle"
             run.mark_failed(exc)
+            from reframx.execution.hooks.base import dispatch_hooks
+
+            dispatch_hooks(ctx.hooks, "on_exception", ctx, exc)
             raise
 
         return run

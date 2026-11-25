@@ -144,18 +144,53 @@ class Experiment:
             hooks=list(self.hooks),
         )
 
+    def restore_state(self, state: Mapping[str, Any]) -> tuple[int, int]:
+        """Restore component/optimizer states and return ``(epoch, global_step)``."""
+        components = state.get("components", state)
+        for role, comp in (
+            ("model", self.model),
+            ("method", self.method),
+            ("dataset", self.dataset),
+            ("strategy", self.strategy),
+        ):
+            if comp is None or role not in components:
+                continue
+            load_state = getattr(comp, "load_component_state", None)
+            if callable(load_state):
+                load_state(components[role])
+            else:
+                load_sd = getattr(comp, "load_state_dict", None)
+                if callable(load_sd):
+                    load_sd(components[role])
+
+        for opt_name, opt in self.optimizers.items():
+            key = f"optimizer_{opt_name}"
+            opt_state = components.get(key) or state.get("optimizers", {}).get(opt_name)
+            if opt_state is not None:
+                load_sd = getattr(opt, "load_state_dict", None)
+                if callable(load_sd):
+                    load_sd(opt_state)
+
+        return int(state.get("epoch", 0)), int(state.get("global_step", 0))
+
     def run(
         self,
         *,
-        max_epochs: int = 1,
+        max_epochs: int | None = None,
         max_steps: int | None = None,
         train_split: str = "train",
         eval_split: str | None = "val",
-        eval_every_epochs: int = 1,
+        eval_every_epochs: int | None = None,
+        eval_every_steps: int | None = None,
+        start_step: int = 0,
+        start_epoch: int = 0,
+        resume_from: str | Path | Mapping[str, Any] | None = None,
+        keep_eval_mode: bool = False,
+        max_train_history: int | None = None,
         validate: bool = True,
         catch_interrupt: bool = False,
     ) -> Run:
-        """Validate (optionally) and execute a training/evaluation Run."""
+        """Validate (optionally), resume (optionally), and execute a Run."""
         validation_report: ValidationReport | None = None
         if validate:
             validation_report = self.validate()
@@ -169,10 +204,44 @@ class Experiment:
                     report=validation_report,
                 )
 
+        resolved_epoch = start_epoch
+        resolved_step = start_step
+        if resume_from is not None:
+            if isinstance(resume_from, Mapping):
+                resumed_ep, resumed_step = self.restore_state(resume_from)
+            else:
+                from reframx.packaging.importer import load_experiment
+
+                imported = load_experiment(resume_from)
+                last_run = imported.runs[-1] if imported.runs else {}
+                last_train = (
+                    last_run.get("train_history", [])[-1]
+                    if last_run.get("train_history")
+                    else {}
+                )
+                resumed_ep, resumed_step = self.restore_state(
+                    {
+                        "components": imported.states,
+                        "epoch": last_train.get("epoch", 0),
+                        "global_step": last_train.get("step", 0),
+                    }
+                )
+            if start_epoch == 0:
+                resolved_epoch = resumed_ep
+            if start_step == 0:
+                resolved_step = resumed_step
+
         run = Run(
             experiment_name=self.name,
             validation_report=validation_report,
-            metadata=dict(self.metadata),
+            metadata={
+                **dict(self.metadata),
+                **(
+                    {"resumed_from": str(resume_from)}
+                    if resume_from is not None and not isinstance(resume_from, Mapping)
+                    else {}
+                ),
+            },
         )
         self.runs.append(run)
 
@@ -186,6 +255,11 @@ class Experiment:
                 train_split=train_split,
                 eval_split=eval_split,
                 eval_every_epochs=eval_every_epochs,
+                eval_every_steps=eval_every_steps,
+                start_step=resolved_step,
+                start_epoch=resolved_epoch,
+                keep_eval_mode=keep_eval_mode,
+                max_train_history=max_train_history,
                 catch_interrupt=catch_interrupt,
             )
         finally:
@@ -216,6 +290,7 @@ class Experiment:
         checkpoint_paths: Iterable[str | Path] = (),
         assets: Mapping[str, str | Path] | None = None,
         include_optimizer_state: bool = True,
+        base_model_ref: str | None = None,
         extra_metadata: Mapping[str, Any] | None = None,
     ) -> Path:
         """Export this experiment snapshot to a portable ``.rfx`` ZIP archive."""
@@ -228,5 +303,6 @@ class Experiment:
             checkpoint_paths=checkpoint_paths,
             assets=assets,
             include_optimizer_state=include_optimizer_state,
+            base_model_ref=base_model_ref,
             extra_metadata=extra_metadata,
         )
